@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { User, AppPermission } from '../types.ts';
@@ -14,8 +13,9 @@ const Sidebar: React.FC<SidebarProps> = ({ logout }) => {
   const { hasPermission } = useApp();
 
   const menuItems = [
+    { path: '/dashboard', label: 'Dashboard BI', icon: 'fa-chart-pie', permission: AppPermission.VIEW_DASHBOARD },
     { path: '/admin', label: 'Admin Panel', icon: 'fa-user-shield', permission: AppPermission.ACCESS_ADMIN_PANEL },
-    { path: '/manager', label: 'Vendas (Geral)', icon: 'fa-chart-line', permission: AppPermission.VIEW_ALL_SALES },
+    { path: '/manager', label: 'Vendas (Geral)', icon: 'fa-list-check', permission: AppPermission.VIEW_ALL_SALES },
     { path: '/seller', label: 'Minhas Vendas', icon: 'fa-hand-holding-dollar', permission: AppPermission.VIEW_OWN_SALES },
   ];
 

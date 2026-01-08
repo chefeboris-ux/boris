@@ -7,14 +7,15 @@ import Register from './pages/Register.tsx';
 import AdminDashboard from './pages/AdminDashboard.tsx';
 import ManagerDashboard from './pages/ManagerDashboard.tsx';
 import SellerDashboard from './pages/SellerDashboard.tsx';
+import BusinessIntelligence from './pages/BusinessIntelligence.tsx';
 import Sidebar from './components/Sidebar.tsx';
 import Navbar from './components/Navbar.tsx';
 import NotificationToast from './components/NotificationToast.tsx';
 
 const DEFAULT_PERMISSIONS: RolePermissionsMap = {
-  [UserRole.ADMIN]: Object.values(AppPermission),
-  [UserRole.MANAGER]: [AppPermission.VIEW_ALL_SALES, AppPermission.APPROVE_SALES],
-  [UserRole.SELLER]: [AppPermission.VIEW_OWN_SALES, AppPermission.CREATE_SALES],
+  [UserRole.ADMIN]: [...Object.values(AppPermission)],
+  [UserRole.MANAGER]: [AppPermission.VIEW_ALL_SALES, AppPermission.APPROVE_SALES, AppPermission.VIEW_DASHBOARD],
+  [UserRole.SELLER]: [AppPermission.VIEW_OWN_SALES, AppPermission.CREATE_SALES, AppPermission.VIEW_DASHBOARD],
 };
 
 const INITIAL_USERS: User[] = [
@@ -85,7 +86,7 @@ const App: React.FC = () => {
       ...userData,
       id: Math.random().toString(36).substr(2, 9),
       createdAt: new Date().toISOString(),
-      confirmed: false // Novo usuário SEMPRE começa como não confirmado
+      confirmed: false
     };
     const updatedUsers = [...users, newUser];
     setUsers(updatedUsers);
@@ -126,7 +127,9 @@ const App: React.FC = () => {
     notify("Sessão encerrada.");
   };
 
-  const PermissionRoute = ({ children, requiredPermission }: { children: React.ReactNode, requiredPermission: AppPermission }) => {
+  // Fix: Making children optional in the prop type definition resolves the "missing children" TS error
+  // that occurs when components are invoked via JSX in certain TypeScript/React versions.
+  const PermissionRoute = ({ children, requiredPermission }: { children?: React.ReactNode, requiredPermission: AppPermission }) => {
     if (!auth.isAuthenticated) return <Navigate to="/login" />;
     if (!hasPermission(requiredPermission)) {
       notify("Acesso negado: você não tem permissão para esta área.", "warning");
@@ -156,6 +159,12 @@ const App: React.FC = () => {
                 <Route path="/login" element={auth.isAuthenticated ? <Navigate to="/" /> : <Login onLogin={login} />} />
                 <Route path="/register" element={<Register />} />
                 
+                <Route path="/dashboard" element={
+                  <PermissionRoute requiredPermission={AppPermission.VIEW_DASHBOARD}>
+                    <BusinessIntelligence user={auth.user!} />
+                  </PermissionRoute>
+                } />
+
                 <Route path="/admin" element={
                   <PermissionRoute requiredPermission={AppPermission.ACCESS_ADMIN_PANEL}>
                     <AdminDashboard />
@@ -176,9 +185,7 @@ const App: React.FC = () => {
 
                 <Route path="/" element={
                   auth.isAuthenticated ? (
-                    hasPermission(AppPermission.ACCESS_ADMIN_PANEL) ? <Navigate to="/admin" /> :
-                    hasPermission(AppPermission.VIEW_ALL_SALES) ? <Navigate to="/manager" /> :
-                    <Navigate to="/seller" />
+                    <Navigate to="/dashboard" />
                   ) : <Navigate to="/login" />
                 } />
               </Routes>
