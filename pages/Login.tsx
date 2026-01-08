@@ -42,7 +42,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-200">
             <i className="fas fa-rocket text-white text-3xl"></i>
           </div>
-          <h1 className="text-3xl font-extrabold text-slate-900">Bem-vindo ao Nexus</h1>
+          <h1 className="text-3xl font-extrabold text-slate-900">Bem-vindo ao Nexus CRM</h1>
           <p className="text-slate-500 mt-2">Entre com suas credenciais para acessar o CRM</p>
         </div>
 
