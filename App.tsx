@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { UserRole, AuthState, User, Notification, AppPermission, RolePermissionsMap } from './types.ts';
+import { supabase } from './lib/supabase.ts';
 import Login from './pages/Login.tsx';
 import Register from './pages/Register.tsx';
 import AdminDashboard from './pages/AdminDashboard.tsx';
@@ -18,21 +18,16 @@ const DEFAULT_PERMISSIONS: RolePermissionsMap = {
   [UserRole.SELLER]: [AppPermission.VIEW_OWN_SALES, AppPermission.CREATE_SALES, AppPermission.VIEW_DASHBOARD],
 };
 
-const INITIAL_USERS: User[] = [
-  { id: '1', name: 'Admin Principal', email: 'admin@nexus.com', role: UserRole.ADMIN, confirmed: true, createdAt: '2023-01-01' },
-  { id: '2', name: 'Carlos Gerente', email: 'gerente@nexus.com', role: UserRole.MANAGER, confirmed: true, createdAt: '2023-02-15' },
-  { id: '3', name: 'Ana Vendedora', email: 'vendedor@nexus.com', role: UserRole.SELLER, confirmed: true, createdAt: '2023-03-10' },
-];
-
 interface AppContextType {
   notify: (message: string, type?: Notification['type']) => void;
   permissions: RolePermissionsMap;
   updateRolePermissions: (role: UserRole, newPerms: AppPermission[]) => void;
   hasPermission: (permission: AppPermission) => boolean;
   users: User[];
-  registerUser: (userData: Omit<User, 'id' | 'createdAt' | 'confirmed'>) => void;
-  updateUser: (id: string, updates: Partial<User>) => void;
-  deleteUser: (id: string) => void;
+  registerUser: (userData: Omit<User, 'id' | 'createdAt' | 'confirmed'>) => Promise<void>;
+  updateUser: (id: string, updates: Partial<User>) => Promise<void>;
+  deleteUser: (id: string) => Promise<void>;
+  refreshUsers: () => Promise<void>;
 }
 
 export const AppContext = createContext<AppContextType | null>(null);
@@ -47,33 +42,80 @@ const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>({ user: null, isAuthenticated: false });
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [permissions, setPermissions] = useState<RolePermissionsMap>(DEFAULT_PERMISSIONS);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      const savedAuth = localStorage.getItem('nexus_auth');
-      if (savedAuth) setAuth(JSON.parse(savedAuth));
+    const initApp = async () => {
+      try {
+        // Carrega Auth do localStorage apenas para a sessão
+        const savedAuth = localStorage.getItem('nexus_auth');
+        if (savedAuth) setAuth(JSON.parse(savedAuth));
 
-      const savedPerms = localStorage.getItem('nexus_permissions');
-      if (savedPerms) setPermissions(JSON.parse(savedPerms));
+        // Busca Permissões do Supabase (tabela crm_config ou similar)
+        const { data: permsData, error: permsError } = await supabase
+          .from('permissions')
+          .select('*');
+        
+        if (permsData && permsData.length > 0) {
+          const mappedPerms = permsData.reduce((acc, curr) => {
+            acc[curr.role as UserRole] = curr.permissions;
+            return acc;
+          }, {} as RolePermissionsMap);
+          setPermissions(mappedPerms);
+        } else {
+          // Se não houver, usa default
+          setPermissions(DEFAULT_PERMISSIONS);
+        }
 
-      const savedUsers = localStorage.getItem('nexus_users');
-      if (savedUsers) setUsers(JSON.parse(savedUsers));
-    } catch (error) {
-      console.error("Erro ao carregar dados do localStorage:", error);
-    }
+        await refreshUsers();
+      } catch (error) {
+        console.error("Erro ao inicializar app:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initApp();
   }, []);
+
+  const refreshUsers = async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (data) {
+      setUsers(data.map(u => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role as UserRole,
+        confirmed: u.confirmed,
+        createdAt: u.created_at
+      })));
+    }
+  };
 
   const notify = (message: string, type: Notification['type'] = 'info') => {
     const id = Math.random().toString(36).substr(2, 9);
     setNotifications(prev => [...prev, { id, message, type, timestamp: new Date() }]);
   };
 
-  const updateRolePermissions = (role: UserRole, newPerms: AppPermission[]) => {
+  const updateRolePermissions = async (role: UserRole, newPerms: AppPermission[]) => {
     const updated = { ...permissions, [role]: newPerms };
     setPermissions(updated);
-    localStorage.setItem('nexus_permissions', JSON.stringify(updated));
-    notify(`Permissões do perfil ${role} atualizadas com sucesso!`, 'success');
+    
+    // Persiste no Supabase
+    const { error } = await supabase
+      .from('permissions')
+      .upsert({ role, permissions: newPerms }, { onConflict: 'role' });
+
+    if (error) {
+      notify("Erro ao salvar permissões no banco.", "warning");
+    } else {
+      notify(`Permissões do perfil ${role} atualizadas com sucesso!`, 'success');
+    }
   };
 
   const hasPermission = (permission: AppPermission) => {
@@ -81,29 +123,50 @@ const App: React.FC = () => {
     return (permissions[auth.user.role] || []).includes(permission);
   };
 
-  const registerUser = (userData: Omit<User, 'id' | 'createdAt' | 'confirmed'>) => {
-    const newUser: User = {
-      ...userData,
-      id: Math.random().toString(36).substr(2, 9),
-      createdAt: new Date().toISOString(),
-      confirmed: false
-    };
-    const updatedUsers = [...users, newUser];
-    setUsers(updatedUsers);
-    localStorage.setItem('nexus_users', JSON.stringify(updatedUsers));
+  const registerUser = async (userData: Omit<User, 'id' | 'createdAt' | 'confirmed'>) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .insert([{
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        confirmed: false
+      }])
+      .select();
+
+    if (error) {
+      notify("Erro ao realizar cadastro: " + error.message, "warning");
+      throw error;
+    } else {
+      await refreshUsers();
+    }
   };
 
-  const updateUser = (id: string, updates: Partial<User>) => {
-    const updatedUsers = users.map(u => u.id === id ? { ...u, ...updates } : u);
-    setUsers(updatedUsers);
-    localStorage.setItem('nexus_users', JSON.stringify(updatedUsers));
+  const updateUser = async (id: string, updates: Partial<User>) => {
+    const { error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      notify("Erro ao atualizar usuário.", "warning");
+    } else {
+      await refreshUsers();
+    }
   };
 
-  const deleteUser = (id: string) => {
-    const updatedUsers = users.filter(u => u.id !== id);
-    setUsers(updatedUsers);
-    localStorage.setItem('nexus_users', JSON.stringify(updatedUsers));
-    notify("Usuário removido com sucesso.");
+  const deleteUser = async (id: string) => {
+    const { error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      notify("Erro ao remover usuário.", "warning");
+    } else {
+      await refreshUsers();
+      notify("Usuário removido com sucesso.");
+    }
   };
 
   const removeNotification = (id: string) => {
@@ -127,8 +190,6 @@ const App: React.FC = () => {
     notify("Sessão encerrada.");
   };
 
-  // Fix: Making children optional in the prop type definition resolves the "missing children" TS error
-  // that occurs when components are invoked via JSX in certain TypeScript/React versions.
   const PermissionRoute = ({ children, requiredPermission }: { children?: React.ReactNode, requiredPermission: AppPermission }) => {
     if (!auth.isAuthenticated) return <Navigate to="/login" />;
     if (!hasPermission(requiredPermission)) {
@@ -137,6 +198,17 @@ const App: React.FC = () => {
     }
     return <>{children}</>;
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-slate-500 font-bold animate-pulse">Conectando ao Nexus Core...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <AppContext.Provider value={{ 
@@ -147,7 +219,8 @@ const App: React.FC = () => {
       users, 
       registerUser, 
       updateUser, 
-      deleteUser 
+      deleteUser,
+      refreshUsers
     }}>
       <HashRouter>
         <div className="flex min-h-screen">
